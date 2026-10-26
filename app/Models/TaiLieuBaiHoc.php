@@ -22,7 +22,7 @@ class TaiLieuBaiHoc extends Model
     /** Số file tối đa trong một lần tải lên. */
     public const MAX_FILES = 10;
 
-    protected $fillable = ['lesson_id', 'original_name', 'path', 'size', 'mime_type'];
+    protected $fillable = ['lesson_id', 'original_name', 'path', 'size', 'mime_type', 'hash'];
 
     protected static function booted(): void
     {
@@ -44,6 +44,20 @@ class TaiLieuBaiHoc extends Model
         foreach ($lessonIds as $id) {
             $disk->deleteDirectory((string) $id);
         }
+    }
+
+    /** SHA-256 nội dung file; bản ghi tạo trước khi có cột hash được tính bù từ đĩa và lưu lại. */
+    public function layHash(): ?string
+    {
+        if ($this->hash === null) {
+            $disk = Storage::disk(self::DISK);
+            if (! $disk->exists($this->path)) {
+                return null;
+            }
+            $this->forceFill(['hash' => hash('sha256', $disk->get($this->path))])->saveQuietly();
+        }
+
+        return $this->hash;
     }
 
     public function dungLuongDeDoc(): string

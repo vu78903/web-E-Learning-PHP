@@ -11,6 +11,7 @@ use App\Models\ChuongHoc;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\View\View;
 use Illuminate\Validation\ValidationException;
@@ -94,6 +95,7 @@ class NoiDungKhoaHocController extends Controller
         Gate::authorize('quanLy', $section->course);
 
         $data = $this->duLieuHopLe($request);
+        $this->chanFileTrung($request, null);
         $data['sort_order'] ??= ($section->lessons()->max('sort_order') ?? 0) + 1;
         $lesson = $section->lessons()->create($data);
         $count = $this->luuTaiLieu($request, $lesson);
@@ -119,6 +121,7 @@ class NoiDungKhoaHocController extends Controller
         Gate::authorize('quanLy', $course);
 
         $data = $this->duLieuHopLe($request);
+        $this->chanFileTrung($request, $lesson);
         $data['sort_order'] ??= $lesson->sort_order;
         $lesson->update($data);
         $count = $this->luuTaiLieu($request, $lesson);
@@ -144,22 +147,107 @@ class NoiDungKhoaHocController extends Controller
         return back()->with('success', 'Đã xóa tài liệu "'.$attachment->original_name.'".');
     }
 
+    /**
+     * Giao diện gọi trước khi gửi form để cảnh báo file trùng với tài liệu đã có của bài học.
+     * Hash do trình duyệt tính (có thể vắng nếu không hỗ trợ Web Crypto) — khi đó chỉ so theo tên.
+     */
+    public function kiemTraTaiLieuTrung(Request $request, BaiHoc $lesson): JsonResponse
+    {
+        Gate::authorize('quanLy', $lesson->section->course);
+
+        $data = $request->validate([
+            'files' => ['required', 'array', 'max:'.TaiLieuBaiHoc::MAX_FILES],
+            'files.*.name' => ['required', 'string', 'max:255'],
+            'files.*.hash' => ['nullable', 'string', 'regex:/^[a-f0-9]{64}$/'],
+        ]);
+
+        return response()->json(['trung' => $this->timFileTrung($data['files'], $lesson)]);
+    }
+
     /** Lưu các file PDF tải lên vào disk riêng tư, trả về số file đã lưu. */
     private function luuTaiLieu(Request $request, BaiHoc $lesson): int
     {
         $files = $request->file('attachments', []);
         foreach ($files as $file) {
-            // Chỉ giữ phần tên file, loại bỏ ký tự điều khiển; tên lưu trên đĩa là chuỗi ngẫu nhiên.
-            $name = preg_replace('/[\x00-\x1F\x7F]/u', '', basename($file->getClientOriginalName())) ?: 'tai-lieu.pdf';
             $lesson->attachments()->create([
-                'original_name' => mb_substr($name, 0, 255),
+                'original_name' => $this->tenFile($file),
                 'path' => $file->store((string) $lesson->id, TaiLieuBaiHoc::DISK),
                 'size' => $file->getSize(),
                 'mime_type' => 'application/pdf',
+                'hash' => hash_file('sha256', $file->getRealPath()),
             ]);
         }
 
         return count($files);
+    }
+
+    /** Chỉ giữ phần tên file, loại bỏ ký tự điều khiển; tên lưu trên đĩa là chuỗi ngẫu nhiên. */
+    private function tenFile(UploadedFile $file): string
+    {
+        $name = preg_replace('/[\x00-\x1F\x7F]/u', '', basename($file->getClientOriginalName())) ?: 'tai-lieu.pdf';
+
+        return mb_substr($name, 0, 255);
+    }
+
+    /**
+     * Kiểm tra lại phía máy chủ (theo hash thật) phòng khi bỏ qua bước kiểm tra trên trình duyệt.
+     * Người dùng đã đồng ý tải file trùng thì form gửi kèm cho_phep_trung=1.
+     */
+    private function chanFileTrung(Request $request, ?BaiHoc $lesson): void
+    {
+        if ($request->boolean('cho_phep_trung')) {
+            return;
+        }
+
+        $files = array_map(fn (UploadedFile $f) => [
+            'name' => $this->tenFile($f),
+            'hash' => hash_file('sha256', $f->getRealPath()),
+        ], $request->file('attachments', []));
+        $trung = $this->timFileTrung($files, $lesson);
+
+        if ($trung !== []) {
+            throw ValidationException::withMessages([
+                'attachments_trung' => array_column($trung, 'thong_bao'),
+            ]);
+        }
+    }
+
+    /**
+     * Tìm file trùng tên (không phân biệt hoa thường) hoặc trùng nội dung (hash) với tài liệu
+     * đã có của bài học, hoặc với file khác trong cùng lần tải lên.
+     *
+     * @param  array<int, array{name: string, hash?: ?string}>  $files
+     * @return list<array{name: string, trung_voi: string, thong_bao: string}>
+     */
+    private function timFileTrung(array $files, ?BaiHoc $lesson): array
+    {
+        $daCo = $lesson?->attachments()->get() ?? collect();
+        $trongLanNay = [];
+        $ketQua = [];
+
+        foreach ($files as $file) {
+            $ten = $file['name'];
+            $hash = $file['hash'] ?? null;
+            $cungTen = fn (string $khac) => mb_strtolower($khac) === mb_strtolower($ten);
+
+            $tonTai = $daCo->first(fn (TaiLieuBaiHoc $a) => $cungTen($a->original_name) || ($hash && $a->layHash() === $hash));
+            if ($tonTai) {
+                $kieu = $hash && $tonTai->layHash() === $hash ? 'trùng nội dung' : 'trùng tên';
+                $ketQua[] = ['name' => $ten, 'trung_voi' => $tonTai->original_name,
+                    'thong_bao' => "\"{$ten}\" {$kieu} với tài liệu đã có \"{$tonTai->original_name}\"."];
+            } else {
+                foreach ($trongLanNay as $truoc) {
+                    if ($cungTen($truoc['name']) || ($hash && $truoc['hash'] === $hash)) {
+                        $ketQua[] = ['name' => $ten, 'trung_voi' => $truoc['name'],
+                            'thong_bao' => "\"{$ten}\" trùng với file \"{$truoc['name']}\" trong cùng lần tải lên."];
+                        break;
+                    }
+                }
+            }
+            $trongLanNay[] = ['name' => $ten, 'hash' => $hash];
+        }
+
+        return $ketQua;
     }
 
     private function duLieuHopLe(Request $request): array

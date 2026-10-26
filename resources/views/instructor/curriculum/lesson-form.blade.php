@@ -8,8 +8,9 @@
 <div class="row justify-content-center"><div class="col-lg-8">
     <div class="card border-0 shadow-sm"><div class="card-body p-4">
         <h3 class="mb-3">{{ $lesson->exists ? 'Sửa bài học' : 'Thêm bài học' }}</h3>
-        <form method="POST" enctype="multipart/form-data" action="{{ $lesson->exists ? route('instructor.lessons.update', $lesson) : route('instructor.lessons.store', $section) }}">
+        <form id="lesson-form" method="POST" enctype="multipart/form-data" action="{{ $lesson->exists ? route('instructor.lessons.update', $lesson) : route('instructor.lessons.store', $section) }}">
             @csrf @if($lesson->exists) @method('PUT') @endif
+            <input type="hidden" id="cho-phep-trung" name="cho_phep_trung" value="0">
             <div class="mb-3"><label class="form-label">Tiêu đề</label>
                 <input id="lesson-title" name="title" value="{{ old('title', $lesson->title) }}" class="form-control" placeholder="Tự điền từ YouTube hoặc nhập thủ công"></div>
             <div class="mb-3"><label class="form-label">Nội dung văn bản</label>
@@ -42,6 +43,17 @@
                 @foreach($errors->get('attachments.*') as $messages)
                     <div class="invalid-feedback">{{ $messages[0] }}</div>
                 @endforeach
+                @if($errors->has('attachments_trung'))
+                    <div class="alert alert-warning small mt-2 mb-0">
+                        <div class="fw-semibold mb-1"><i class="bi bi-exclamation-triangle"></i> Phát hiện tài liệu trùng, chưa có gì được lưu:</div>
+                        <ul class="mb-2 ps-3">@foreach($errors->get('attachments_trung') as $message)<li>{{ $message }}</li>@endforeach</ul>
+                        <div class="form-check mb-0">
+                            <input class="form-check-input" type="checkbox" id="xac-nhan-trung"
+                                   onchange="document.getElementById('cho-phep-trung').value = this.checked ? 1 : 0">
+                            <label class="form-check-label" for="xac-nhan-trung">Tôi vẫn muốn tải lên các file trùng (chọn lại file rồi bấm Lưu)</label>
+                        </div>
+                    </div>
+                @endif
             </div>
             <div class="mb-3" style="max-width:180px"><label class="form-label">Thứ tự</label>
                 <input type="number" name="sort_order" value="{{ old('sort_order', $lesson->sort_order) }}" class="form-control" placeholder="Tự động"></div>
@@ -49,6 +61,23 @@
             <a href="{{ route('instructor.curriculum', $course) }}" class="btn btn-link">Hủy</a>
         </form>
     </div></div>
+
+    <div class="modal fade" id="modal-file-trung" tabindex="-1" aria-labelledby="modal-file-trung-title" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered"><div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="modal-file-trung-title"><i class="bi bi-exclamation-triangle text-warning"></i> Phát hiện tài liệu trùng</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Đóng"></button>
+            </div>
+            <div class="modal-body">
+                <ul id="danh-sach-trung" class="mb-2 ps-3"></ul>
+                <p class="text-muted small mb-0">Nếu vẫn tải lên, bài học sẽ có thêm bản sao của các tài liệu này.</p>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Hủy, chọn lại file</button>
+                <button type="button" id="van-tai-len" class="btn btn-warning">Vẫn tải lên</button>
+            </div>
+        </div></div>
+    </div>
 
     @if($lesson->exists)
         <div class="card border-0 shadow-sm mt-3"><div class="card-body p-4">
@@ -109,6 +138,82 @@
 
     button.addEventListener('click', layThongTin);
     url.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(layThongTin, 500); });
+})();
+
+// Cảnh báo file PDF trùng (tên hoặc nội dung) trước khi gửi form; máy chủ vẫn kiểm tra lại khi lưu.
+(() => {
+    const form = document.getElementById('lesson-form');
+    const input = document.getElementById('attachments');
+    const choPhep = document.getElementById('cho-phep-trung');
+    const modalEl = document.getElementById('modal-file-trung');
+    const modal = new bootstrap.Modal(modalEl);
+    const endpoint = @json($lesson->exists ? route('instructor.lessons.attachments.kiem-tra-trung', $lesson) : null);
+    let daKiemTra = false;
+
+    // Web Crypto chỉ có trong secure context (https/localhost); không có thì chỉ so theo tên.
+    async function sha256(file) {
+        if (!window.crypto?.subtle) return null;
+        const buffer = await crypto.subtle.digest('SHA-256', await file.arrayBuffer());
+        return [...new Uint8Array(buffer)].map(b => b.toString(16).padStart(2, '0')).join('');
+    }
+
+    function trungTrongLanNay(files) {
+        const ketQua = [];
+        files.forEach((f, i) => {
+            const truoc = files.slice(0, i).find(p => p.name.toLowerCase() === f.name.toLowerCase() || (f.hash && p.hash === f.hash));
+            if (truoc) ketQua.push({thong_bao: `"${f.name}" trùng với file "${truoc.name}" trong cùng lần tải lên.`});
+        });
+        return ketQua;
+    }
+
+    async function timFileTrung() {
+        const files = await Promise.all([...input.files].map(async f => ({name: f.name, hash: await sha256(f)})));
+        if (!endpoint) return trungTrongLanNay(files);
+
+        const response = await fetch(endpoint, {
+            method: 'POST',
+            headers: {'Accept': 'application/json', 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest',
+                      'X-CSRF-TOKEN': form.querySelector('input[name=_token]').value},
+            body: JSON.stringify({files}),
+        });
+        if (!response.ok) throw new Error('Không kiểm tra được file trùng.');
+        return (await response.json()).trung;
+    }
+
+    // Chọn lại file thì phải kiểm tra lại, trừ khi đã tick ô đồng ý ở cảnh báo của máy chủ.
+    input.addEventListener('change', () => {
+        daKiemTra = false;
+        choPhep.value = document.getElementById('xac-nhan-trung')?.checked ? 1 : 0;
+    });
+
+    form.addEventListener('submit', async (event) => {
+        if (daKiemTra || choPhep.value === '1' || !input.files.length) return;
+        event.preventDefault();
+        const nutLuu = form.querySelector('button.btn-primary');
+        nutLuu.disabled = true;
+        let trung = [];
+        try {
+            trung = await timFileTrung();
+        } catch (e) {
+            trung = []; // lỗi mạng: cứ gửi, máy chủ sẽ chặn nếu thật sự trùng
+        } finally {
+            nutLuu.disabled = false;
+        }
+
+        daKiemTra = true;
+        if (!trung.length) return form.requestSubmit();
+
+        const list = document.getElementById('danh-sach-trung');
+        list.replaceChildren(...trung.map(t => Object.assign(document.createElement('li'), {textContent: t.thong_bao})));
+        modal.show();
+    });
+
+    modalEl.addEventListener('hidden.bs.modal', () => { if (choPhep.value !== '1') daKiemTra = false; });
+    document.getElementById('van-tai-len').addEventListener('click', () => {
+        choPhep.value = 1;
+        modal.hide();
+        form.requestSubmit();
+    });
 })();
 </script>
 @endpush

@@ -118,6 +118,7 @@ Route::middleware(['auth', 'email.xac_minh'])->group(function () {
         Route::get('/lessons/{lesson}/edit', [Instructor\NoiDungKhoaHocController::class, 'chinhSuaBaiHoc'])->name('lessons.edit');
         Route::put('/lessons/{lesson}', [Instructor\NoiDungKhoaHocController::class, 'capNhatBaiHoc'])->name('lessons.update');
         Route::delete('/lessons/{lesson}', [Instructor\NoiDungKhoaHocController::class, 'xoaBaiHoc'])->name('lessons.destroy');
+        Route::post('/lessons/{lesson}/attachments/kiem-tra-trung', [Instructor\NoiDungKhoaHocController::class, 'kiemTraTaiLieuTrung'])->name('lessons.attachments.kiem-tra-trung');
         Route::delete('/attachments/{attachment}', [Instructor\NoiDungKhoaHocController::class, 'xoaTaiLieu'])->name('attachments.destroy');
 
         // Bài kiểm tra, câu hỏi, phương án

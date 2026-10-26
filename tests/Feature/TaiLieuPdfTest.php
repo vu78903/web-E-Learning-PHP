@@ -19,11 +19,12 @@ class TaiLieuPdfTest extends TestCase
         Storage::fake(TaiLieuBaiHoc::DISK);
     }
 
-    private function pdf(string $ten = 'tai-lieu.pdf'): UploadedFile
+    /** Nội dung phụ thuộc $noiDung (mặc định là tên file) để các file khác tên không bị coi là trùng nội dung. */
+    private function pdf(string $ten = 'tai-lieu.pdf', ?string $noiDung = null): UploadedFile
     {
         return UploadedFile::fake()->createWithContent(
             $ten,
-            "%PDF-1.4\n1 0 obj\n<< /Type /Catalog >>\nendobj\ntrailer\n<<>>\n%%EOF"
+            "%PDF-1.4\n%".($noiDung ?? $ten)."\n1 0 obj\n<< /Type /Catalog >>\nendobj\ntrailer\n<<>>\n%%EOF"
         );
     }
 
@@ -117,6 +118,57 @@ class TaiLieuPdfTest extends TestCase
         ])->assertSessionHasErrors('attachments');
 
         $this->assertDatabaseCount('lesson_attachments', 0);
+    }
+
+    public function test_chan_file_trung_ten_hoac_noi_dung_tru_khi_dong_y(): void
+    {
+        [$giangVien, $khoaHoc, $chuong] = $this->duLieuKhoaHoc();
+        $baiHoc = $chuong->lessons()->create(['title' => 'Bài 1']);
+        $this->actingAs($giangVien)->put(route('instructor.lessons.update', $baiHoc), [
+            'title' => 'Bài 1', 'attachments' => [$this->pdf('giao-trinh.pdf')],
+        ])->assertSessionHasNoErrors();
+
+        // Trùng tên (khác hoa thường) và trùng nội dung với tài liệu đã có.
+        foreach ([$this->pdf('GIAO-TRINH.pdf', 'khac'), $this->pdf('ban-sao.pdf', 'giao-trinh.pdf')] as $file) {
+            $this->actingAs($giangVien)->put(route('instructor.lessons.update', $baiHoc), [
+                'title' => 'Bài 1', 'attachments' => [$file],
+            ])->assertSessionHasErrors('attachments_trung');
+        }
+        $this->assertCount(1, $baiHoc->attachments()->get());
+
+        // Trùng trong cùng một lần tải lên bài mới.
+        $this->actingAs($giangVien)->post(route('instructor.lessons.store', $chuong), [
+            'title' => 'Bài 2', 'attachments' => [$this->pdf('a.pdf', 'x'), $this->pdf('b.pdf', 'x')],
+        ])->assertSessionHasErrors('attachments_trung');
+        $this->assertSame(1, $chuong->lessons()->count());
+
+        $this->actingAs($giangVien)->put(route('instructor.lessons.update', $baiHoc), [
+            'title' => 'Bài 1', 'attachments' => [$this->pdf('ban-sao.pdf', 'giao-trinh.pdf')], 'cho_phep_trung' => '1',
+        ])->assertRedirect(route('instructor.curriculum', $khoaHoc));
+        $this->assertCount(2, $baiHoc->attachments()->get());
+    }
+
+    public function test_api_kiem_tra_trung_tra_ve_danh_sach_va_tinh_bu_hash_cu(): void
+    {
+        [$giangVien, , $chuong] = $this->duLieuKhoaHoc();
+        $baiHoc = $chuong->lessons()->create(['title' => 'Bài 1']);
+        $noiDung = '%PDF-1.4 cu';
+        Storage::disk(TaiLieuBaiHoc::DISK)->put($baiHoc->id.'/cu.pdf', $noiDung);
+        $baiHoc->attachments()->create([
+            'original_name' => 'cu.pdf', 'path' => $baiHoc->id.'/cu.pdf', 'size' => 11, 'mime_type' => 'application/pdf',
+        ]);
+        $url = route('instructor.lessons.attachments.kiem-tra-trung', $baiHoc);
+
+        $this->actingAs($giangVien)->postJson($url, ['files' => [
+            ['name' => 'moi.pdf', 'hash' => hash('sha256', $noiDung)],
+            ['name' => 'Cu.PDF', 'hash' => null],
+            ['name' => 'khac.pdf', 'hash' => null],
+        ]])->assertOk()->assertJsonCount(2, 'trung')
+            ->assertJsonPath('trung.0.trung_voi', 'cu.pdf')
+            ->assertJsonPath('trung.1.name', 'Cu.PDF');
+
+        $this->assertSame(hash('sha256', $noiDung), $baiHoc->attachments()->first()->hash);
+        $this->actingAs($this->giangVien())->postJson($url, ['files' => [['name' => 'x.pdf']]])->assertForbidden();
     }
 
     public function test_chi_nguoi_co_quyen_moi_xem_va_tai_pdf(): void
