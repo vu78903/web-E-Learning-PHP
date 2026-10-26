@@ -7,13 +7,15 @@ use App\Models\KhoaHoc;
 use App\Models\DangKyKhoaHoc;
 use App\Models\LuotLamBai;
 use App\Models\NguoiDung;
+use App\ChucNang\BangDiemHocVien;
 use App\ChucNang\DuLieuBieuDo;
+use Illuminate\Http\Request;
 use Illuminate\View\View;
 
 /** Dashboard thống kê tổng quan dành cho quản trị viên. */
 class BangDieuKhienController extends Controller
 {
-    public function hienThi(): View
+    public function hienThi(Request $request): View
     {
         $submitted = LuotLamBai::whereNotNull('submitted_at');
 
@@ -33,6 +35,7 @@ class BangDieuKhienController extends Controller
                     ? round((clone $submitted)->where('passed', true)->count() / $n * 100) : null,
             ],
             'charts' => (new DuLieuBieuDo)->thanhMang(),
+            'bangDiem' => (new BangDiemHocVien)->thanhMang($request),
             'recentEnrollments' => DangKyKhoaHoc::with(['user', 'course'])->latest('enrolled_at')->latest('id')->take(8)->get(),
             'recentAttempts' => LuotLamBai::with(['user', 'quiz.course'])->whereNotNull('submitted_at')
                 ->latest('submitted_at')->take(8)->get(),

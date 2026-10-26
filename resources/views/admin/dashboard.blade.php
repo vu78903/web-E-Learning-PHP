@@ -34,6 +34,7 @@
                 @empty<li class="list-group-item text-muted">Chưa có đăng ký.</li>@endforelse
             </ul></div>
     </div>
+    @include('partials.bang-diem-hoc-vien')
     <div class="col-12">
         <div class="card border-0 shadow-sm"><div class="card-header bg-white fw-semibold">Kết quả kiểm tra gần đây</div>
             <table class="table mb-0 small">

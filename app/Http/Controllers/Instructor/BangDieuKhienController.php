@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\KhoaHoc;
 use App\Models\DangKyKhoaHoc;
 use App\Models\LuotLamBai;
+use App\ChucNang\BangDiemHocVien;
 use App\ChucNang\DuLieuBieuDo;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\Request;
@@ -34,6 +35,7 @@ class BangDieuKhienController extends Controller
                 'pass_rate' => $attempts ? round((clone $submitted)->where('passed', true)->count() / $attempts * 100) : null,
             ],
             'charts' => (new DuLieuBieuDo($id))->thanhMang(),
+            'bangDiem' => (new BangDiemHocVien($id))->thanhMang($request),
             'recentEnrollments' => (clone $enrollments)->with(['user', 'course'])
                 ->latest('enrolled_at')->latest('id')->take(8)->get(),
             'recentAttempts' => (clone $submitted)->with(['user', 'quiz.course'])
