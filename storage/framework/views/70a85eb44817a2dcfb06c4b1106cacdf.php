@@ -33,6 +33,7 @@
                 <?php endforeach; $__env->popLoop(); $loop = $__env->getLastLoop(); if ($__empty_1): ?><li class="list-group-item text-muted">Chưa có đăng ký.</li><?php endif; ?>
             </ul></div>
     </div>
+    <?php echo $__env->make('partials.bang-diem-hoc-vien', array_diff_key(get_defined_vars(), ['__data' => 1, '__path' => 1]))->render(); ?>
     <div class="col-12">
         <div class="card border-0 shadow-sm"><div class="card-header bg-white fw-semibold">Kết quả kiểm tra gần đây</div>
             <table class="table mb-0 small">
